@@ -9,19 +9,24 @@
 
 library(shiny)
 library(DT)
+library(bslib)
+library(ggplot2)
+library(colourpicker) 
+library(tidyverse)
 
 # Define UI for application that draws a histogram
 ui <- fluidPage(
   titlePanel("Haniya Kamal BF591 Final Project"),
   sidebarLayout(
     sidebarPanel(
-      fileInput('csv_file', label = paste0('Upload your file')),
+      fileInput('csv_file', label = paste0('Upload your metadata matrix'), accept = '.csv'),
+      fileInput('csv_file2', label = paste0('Upload your counts matrix'), accept = '.csv'),
     ),
     mainPanel(
       tabsetPanel(
         tabPanel("Samples",
           tabsetPanel(
-            tabPanel("Summary", tableOutput("summary")), #Tab with a summary of the table that includes a summary of the type and values in each column
+            tabPanel("Summary", paste0("Summary table of Dataset:"), tableOutput("summary")), #Tab with a summary of the table that includes a summary of the type and values in each column
             tabPanel("Table", DTOutput("table")), #Tab with a data table displaying the sample information, with sortable columns
             tabPanel("Plots", #Tab with histograms, density plots, or violin plots of continuous variable3
               plotOutput("plot1"),
@@ -32,7 +37,7 @@ ui <- fluidPage(
         ),
         tabPanel("Counts",
           tabsetPanel(
-            tabPanel("Counts Table", tableOutput("table2")),
+            tabPanel("Counts Table", tableOutput("countstable")),
             tabPanel("Scatterplots",
               plotOutput("plot4"), # Median count vs variance
               plotOutput("plot5")  # Median count vs number of zeros
@@ -59,8 +64,9 @@ ui <- fluidPage(
 
 #
 server <- function(input, output) {
+  options(shiny.maxRequestSize = 30*1024^2)
   
-  load_data <- reactive({ #CSV file can be uploaded 
+  load_data <- reactive({ #CSV file can be uploaded for the metadata
     req(input$csv_file)
     data <- input$csv_file
     if (is.null(data)) {
@@ -68,6 +74,16 @@ server <- function(input, output) {
     }
     d<-read.csv(data$datapath, header = TRUE)
     return(d)
+  })
+  
+  load_counts <- reactive({ #CSV file can be uploaded for the counts matrix
+    req(input$csv_file2)
+    data2 <- input$csv_file2
+    if (is.null(data2)) {
+      return(NULL)
+    }
+    d2<-read.csv(data2$datapath, header = TRUE)
+    return(d2)
   })
   
   datatable1 <- function(dataf) { #making the datatable for samples tab
@@ -121,6 +137,21 @@ server <- function(input, output) {
     data2 <- load_data()             #table will be sortable
     datatable1(data2) #loading the sample table 
   })
+  
+  output$plot1 <- renderPlot({
+    violin_data <- load_data()
+    plot <- ggplot(violin_data) +
+      geom_violin(aes(x=!!sym('Diagnosis'),y=!!sym('Age.of.Death'),fill=Diagnosis))
+    return(plot)
+    
+  })
+  
+  output$countstable <- renderTable({ #show the counts data in the counts matrix tabset
+    counts <- load_counts()
+    
+  })
+  
+  
 }
 
 # Run the application 
