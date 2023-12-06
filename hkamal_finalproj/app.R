@@ -29,9 +29,10 @@ ui <- fluidPage(
             tabPanel("Summary", paste0("Summary table of Dataset:"), tableOutput("summary")), #Tab with a summary of the table that includes a summary of the type and values in each column
             tabPanel("Table", DTOutput("table")), #Tab with a data table displaying the sample information, with sortable columns
             tabPanel("Plots", #Tab with histograms, density plots, or violin plots of continuous variable3
-              plotOutput("plot1"),
-              plotOutput("plot2"),
-              plotOutput("plot3")
+              radioButtons("sample_plots", "Choose a plot that you would like to see.",
+                           choices = c('Diagnosis vs. Age of Death Violin Plot', 
+                                       'RNA Integrity Number (RIN) Histogram', 'PMI Histogram')),
+              plotOutput("plot1")
             )
           )
         ),
@@ -138,13 +139,25 @@ server <- function(input, output) {
     datatable1(data2) #loading the sample table 
   })
   
-  output$plot1 <- renderPlot({
-    violin_data <- load_data()
-    plot <- ggplot(violin_data) +
-      geom_violin(aes(x=!!sym('Diagnosis'),y=!!sym('Age.of.Death'),fill=Diagnosis))
-    return(plot)
+  output$plot1 <- renderPlot({ #plots for the sample tab
+    plot_type <- input$sample_plots
+    sample_tab_data <- load_data()
     
+    if (plot_type == 'Diagnosis vs. Age of Death Violin Plot') {
+      plot <- ggplot(sample_tab_data) +
+        geom_violin(aes(x=!!sym('Diagnosis'), y=!!sym('Age.of.Death'), fill=Diagnosis))
+      return(plot)
+    } else if (plot_type == 'RNA Integrity Number (RIN) Histogram') {
+      plot2 <- ggplot(sample_tab_data) +
+        geom_histogram(aes(x=!!sym('Rin'), fill=Diagnosis))
+      return(plot2)
+    } else if (plot_type == 'PMI Histogram') {
+      plot3 <- ggplot(sample_tab_data) +
+        geom_histogram(aes(x=!!sym('PMI'), fill=Diagnosis))
+      return(plot3)
+    }
   })
+  
   
   output$countstable <- renderTable({ #show the counts data in the counts matrix tabset
     counts <- load_counts()
