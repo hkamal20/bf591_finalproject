@@ -19,8 +19,9 @@ ui <- fluidPage(
   titlePanel("Haniya Kamal BF591 Final Project"),
   sidebarLayout(
     sidebarPanel(
-      fileInput('csv_file', label = paste0('Upload your metadata matrix'), accept = '.csv'),
-      fileInput('csv_file2', label = paste0('Upload your counts matrix'), accept = '.csv'),
+      fileInput('csv_file', label = paste0('Upload your metadata matrix.'), accept = '.csv'),
+      fileInput('csv_file2', label = paste0('Upload your counts matrix.'), accept = '.csv'),
+      fileInput('csv_file3', label = paste0('Upload your differential expression results.'), accept = '.csv' )
     ),
     mainPanel(
       tabsetPanel(
@@ -38,6 +39,8 @@ ui <- fluidPage(
         ),
         tabPanel("Counts",
           tabsetPanel(
+            sliderInput("variance", "Slider to include genes with at least X percentile of variance", min = 0, max = 100, value = 50),
+            sliderInput("num_genes", "Slider to include genes with at least X samples that are non-zero", min = 0, max = 69, value = 69),
             tabPanel("Counts Table", tableOutput("countstable")),
             tabPanel("Scatterplots",
               plotOutput("plot4"), # Median count vs variance
@@ -53,7 +56,11 @@ ui <- fluidPage(
         ),
         tabPanel("Differential Expression",
             tabsetPanel(
-              tabPanel("Differential Expression Results", tableOutput("table3")), #sortable table displaying differential expression results
+              tabPanel("Differential Expression Results Table", DTOutput("deseqtable")), #sortable table displaying differential expression results
+              tabPanel("Differential Expression Plots", 
+                radioButtons("deseq_plot_button", "Choose an analysis that you would like to see.",
+                             choices = c('Histogram of raw pvalues', 'Histogram of Log2FoldChanges', 'LogFC Volcano Plot')),
+                plotOutput("deseq_plots"))
                 #Tab with content similar to that described in [Assignment 7]
           )
         ),
@@ -65,7 +72,7 @@ ui <- fluidPage(
 
 #
 server <- function(input, output) {
-  options(shiny.maxRequestSize = 30*1024^2)
+  options(shiny.maxRequestSize = 30*1024^2) # so program can take a larger file size
   
   load_data <- reactive({ #CSV file can be uploaded for the metadata
     req(input$csv_file)
@@ -86,6 +93,37 @@ server <- function(input, output) {
     d2<-read.csv(data2$datapath, header = TRUE)
     return(d2)
   })
+  
+  load_deseq_data <- reactive({ #CSV file can be uploaded to show the deseq results
+    req(input$csv_file3)
+    deseq_data <- input$csv_file3
+    if (is.null(deseq_data)) {
+      return(NULL)
+    }
+    deseq <- read.csv(deseq_data$datapath, header = TRUE)
+    return(deseq)
+  })
+   
+  labeled_deseq <- reactive({             #creating a dataframe with a column to indicate if the gene is 
+    deseq_results <- load_deseq_data()    #up or down regulated, or neither
+    
+    lab_df <- deseq_results %>%
+      rownames_to_column(var = "Gene") %>%
+      mutate(
+        log2FC = log2FoldChange,
+        padjust = (padj),
+        volcplot_status = case_when(
+          padjust < 0.01 & log2FC > 0 ~ "UP",
+          padjust < 0.01 & log2FC < 0 ~ "DOWN",
+          TRUE ~ "NS"
+        )
+      ) %>%
+      select(Gene, log2FC, padjust, volcplot_status)
+    #print(lab_df)
+    return(lab_df)
+    
+  })
+  
   
   datatable1 <- function(dataf) { #making the datatable for samples tab
     df <- dataf 
@@ -127,7 +165,13 @@ server <- function(input, output) {
     
     return(d_sum)
   }
-
+  
+  deseq_func <- function(data) { #this is the function that the output will pull from to show deseq data
+    deseq_df <- data
+    return(deseq_df)
+  }
+  
+  
   output$summary <- renderTable({ #pulling the summary table from the function, part of samples tabset
     summary_df <- load_data()
     summarytable(summary_df)
@@ -140,7 +184,7 @@ server <- function(input, output) {
   })
   
   output$plot1 <- renderPlot({ #plots for the sample tab
-    plot_type <- input$sample_plots
+    plot_type <- input$sample_plots #setting the radio button 
     sample_tab_data <- load_data()
     
     if (plot_type == 'Diagnosis vs. Age of Death Violin Plot') {
@@ -161,9 +205,41 @@ server <- function(input, output) {
   
   output$countstable <- renderTable({ #show the counts data in the counts matrix tabset
     counts <- load_counts()
+    if (!is.null(counts)) { 
+      counts <- counts[1:input$num_genes, ] 
+    }
+    return(counts)
     
   })
   
+  output$deseqtable <- renderDT({ #show the sortable Deseq table
+    deseq_df_results <- load_deseq_data()
+    deseq_func(deseq_df_results)
+  })
+  
+ 
+  output$deseq_plots <- renderPlot({ 
+    deseq_plot_type <- input$deseq_plot_button
+    deseq_tab_data <- load_deseq_data()
+    
+    if (deseq_plot_type == 'Histogram of raw pvalues') { #a histogram of the raw p-values from the DESeq2 results
+      his_plot1 <- ggplot(deseq_tab_data) +
+        geom_histogram(mapping=aes(x=!!sym('pvalue')), bins = 50,  fill = 'lightblue', color = 'black') +
+        ggtitle('Histogram of raw pvalues obtained from DE analysis')
+      return(his_plot1)
+    } else if (deseq_plot_type == 'Histogram of Log2FoldChanges') {   #log2foldchange from DESeq2 results in a histogram
+      his_plot2 <- ggplot(deseq_tab_data) +
+        geom_histogram(mapping = aes(x=!!sym('log2FoldChange')), bins = 100, fill = 'lightblue', color = 'black') +
+        ggtitle('Histogram of Log2FoldChanges for DE Genes')
+      return(his_plot2)
+    } else if (deseq_plot_type == 'LogFC Volcano Plot') {  #volcano plot that displays log2foldchange vs -log10(padj) and labeled by status
+      volc <- ggplot(data = labeled_deseq()) + #passing the data dataframe from a function i created above 
+        geom_point(aes(x = log2FC, y = -log10(padjust), color = volcplot_status)) +
+        ggtitle('Volcano plot of DESeq2 differential expression results')
+      return(volc)
+    }
+    
+  })
   
 }
 
