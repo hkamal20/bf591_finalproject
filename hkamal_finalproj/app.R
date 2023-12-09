@@ -13,10 +13,13 @@ library(bslib)
 library(ggplot2)
 library(colourpicker) 
 library(tidyverse)
+library(dplyr)
+
 
 # Define UI for application that draws a histogram
 ui <- fluidPage(
   titlePanel("Haniya Kamal BF591 Final Project"),
+  theme = bslib::bs_theme(bootswatch = "pulse", version = 5),
   sidebarLayout(
     sidebarPanel(
       fileInput('csv_file', label = paste0('Upload your metadata matrix.'), accept = '.csv'),
@@ -41,7 +44,8 @@ ui <- fluidPage(
           tabsetPanel(
             sliderInput("variance", "Slider to include genes with at least X percentile of variance", min = 0, max = 100, value = 50),
             sliderInput("num_genes", "Slider to include genes with at least X samples that are non-zero", min = 0, max = 69, value = 69),
-            tabPanel("Counts Table", tableOutput("countstable")),
+            tabPanel("Counts Summary Statistics",
+                     verbatimTextOutput("summary_stats")),
             tabPanel("Scatterplots",
               plotOutput("plot4"), # Median count vs variance
               plotOutput("plot5")  # Median count vs number of zeros
@@ -90,7 +94,8 @@ server <- function(input, output) {
     if (is.null(data2)) {
       return(NULL)
     }
-    d2<-read.csv(data2$datapath, header = TRUE)
+    d2 <- read.csv(data2$datapath, header = TRUE, row.names = 1)
+    #print (d2)
     return(d2)
   })
   
@@ -166,6 +171,24 @@ server <- function(input, output) {
     return(d_sum)
   }
   
+  filteredData <- reactive({
+    req(load_counts())
+    variance_threshold <- quantile(apply(load_counts(), 1, var), probs = input$variance / 100)
+    num_genes_threshold <- input$num_genes
+    
+    
+    filtered_genes_var <- rownames(load_counts())[apply(load_counts(), 1, var) >= variance_threshold]
+    filtered_genes_non_zero <- rownames(load_counts())[rowSums(load_counts() > 0) >= num_genes_threshold]
+    #filtered_genes <- intersect(filtered_genes_var, filtered_genes_non_zero)
+    
+    
+    f <- filter(load_counts(),apply(load_counts(), 1, var) >= variance_threshold, rowSums(load_counts() > 0) >= num_genes_threshold)
+    #  filtered <- load_counts()[filtered_genes, , drop = FALSE]
+    
+    return(f)
+  })
+  
+  
   deseq_func <- function(data) { #this is the function that the output will pull from to show deseq data
     deseq_df <- data
     return(deseq_df)
@@ -205,12 +228,34 @@ server <- function(input, output) {
   
   output$countstable <- renderTable({ #show the counts data in the counts matrix tabset
     counts <- load_counts()
-    if (!is.null(counts)) { 
-      counts <- counts[1:input$num_genes, ] 
-    }
-    return(counts)
     
+    if (!is.null(counts)) {
+      non_zero_counts <- apply(counts[, -1], 1, function(x) sum(x > 0))  # Count non-zero values for each gene
+      #filter genes based on the slider input
+      selected_genes <- counts[non_zero_counts >= input$num_genes, ]
+      
+      # Use the selected genes to filter the original counts data
+      counts <- counts[counts$gene %in% selected_genes$gene, ]
+    }
+    
+    return(counts)
   })
+  
+  
+  output$summary_stats <- renderText({
+    # Compute summary statistics based on filters
+    counts_data <- load_counts()
+    filtered_data <- filteredData()
+    
+    #print(filtered_data)
+    paste0("Number of samples: ", ncol(counts_data),
+           "\nTotal number of genes: ", nrow(counts_data),
+           "\nNumber of genes passing current filter: ", nrow(filtered_data),
+           "\nPercent of genes passing current filter: ", nrow(filtered_data) / nrow(load_counts()) * 100, "%",
+           "\nNumber of genes not passing current filter: ", nrow(load_counts()) - nrow(filtered_data),
+           "\nPercent of genes not passing current filter: ", ((nrow(load_counts()) - nrow(filtered_data))/(nrow(load_counts()))) * 100, "%")
+  })
+  
   
   output$deseqtable <- renderDT({ #show the sortable Deseq table
     deseq_df_results <- load_deseq_data()
