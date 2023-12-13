@@ -14,6 +14,9 @@ library(ggplot2)
 library(colourpicker) 
 library(tidyverse)
 library(dplyr)
+library(cowplot)
+library(RColorBrewer)
+library(gplots)
 
 
 # Define UI for application that draws a histogram
@@ -47,14 +50,13 @@ ui <- fluidPage(
             tabPanel("Counts Summary Statistics",
                      verbatimTextOutput("summary_stats")),
             tabPanel("Scatterplots",
-              plotOutput("plot4"), # Median count vs variance
-              plotOutput("plot5")  # Median count vs number of zeros
-                   ),
+                     plotOutput("combined_scatter")),
             tabPanel("Heatmap",
               plotOutput("heatmap")  # Clustered heatmap of counts remaining after filtering
                    ),
-            tabPanel("PCA plot",
-              plotOutput("pcaplot")
+            tabPanel("PCA plot", numericInput('x_axis', 'Choose a Principle Component as the X axis:', value = 1, min = 1, max = 10),
+                     numericInput('y_axis', 'Choose a Principle Component as the Y axis:', value = 2, min = 1, max = 10),
+                     plotOutput("pcaplot")
             )
           )
         ),
@@ -151,7 +153,7 @@ server <- function(input, output) {
       } else {
         # Count distinct values for non-numeric columns
         distinct_values <- length(unique(x))
-        return(paste(distinct_values, " distinct values"))
+        return(paste(distinct_values, " distinct values")) 
       }
     }
     
@@ -182,11 +184,24 @@ server <- function(input, output) {
     #filtered_genes <- intersect(filtered_genes_var, filtered_genes_non_zero)
     
     
-    f <- filter(load_counts(),apply(load_counts(), 1, var) >= variance_threshold, rowSums(load_counts() > 0) >= num_genes_threshold)
+    #f <- filter(load_counts(),apply(load_counts(), 1, var) >= variance_threshold, rowSums(load_counts() > 0) >= num_genes_threshold)
     #  filtered <- load_counts()[filtered_genes, , drop = FALSE]
     
+    f <- load_counts() %>% 
+      mutate(Passes_Filter = ifelse(rowSums(. > 0) >= num_genes_threshold & apply(., 1, var) >= variance_threshold, "Yes", "No"))
     return(f)
   })
+  
+  pca_data <- function(dataf){
+    #counts <- load_counts()
+    #metadata <- load_data()
+    
+    numeric_data <- dataf[, sapply(dataf, is.numeric)]
+    expr_mat <- as.matrix(numeric_data) #pca plot requires numeric data
+    expr_mat_centered <- scale(expr_mat)
+    pca <- prcomp(expr_mat_centered, center = FALSE, scale = TRUE)
+    return(pca)
+  }
   
   
   deseq_func <- function(data) { #this is the function that the output will pull from to show deseq data
@@ -243,17 +258,88 @@ server <- function(input, output) {
   
   
   output$summary_stats <- renderText({
-    # Compute summary statistics based on filters
     counts_data <- load_counts()
     filtered_data <- filteredData()
     
     #print(filtered_data)
     paste0("Number of samples: ", ncol(counts_data),
            "\nTotal number of genes: ", nrow(counts_data),
-           "\nNumber of genes passing current filter: ", nrow(filtered_data),
-           "\nPercent of genes passing current filter: ", nrow(filtered_data) / nrow(load_counts()) * 100, "%",
-           "\nNumber of genes not passing current filter: ", nrow(load_counts()) - nrow(filtered_data),
-           "\nPercent of genes not passing current filter: ", ((nrow(load_counts()) - nrow(filtered_data))/(nrow(load_counts()))) * 100, "%")
+           "\nNumber of genes passing current filter: ", sum(filtered_data$Passes_Filter == "Yes"),
+           "\nPercent of genes passing current filter: ", sum(filtered_data$Passes_Filter == "Yes") / nrow(load_counts()) * 100, "%",
+           "\nNumber of genes not passing current filter: ", sum(filtered_data$Passes_Filter == "No"),
+           "\nPercent of genes not passing current filter: ", sum(filtered_data$Passes_Filter == "No") / nrow(load_counts()) * 100, "%")
+  })
+  
+  output$combined_scatter <- renderPlot({
+    filtered_data <- filteredData()
+    numeric_cols <- Filter(is.numeric, filtered_data) #excluding the gene and passes_filter column
+    
+    # test <- apply(numeric_cols, 1, function(x) median(x, na.rm = TRUE))
+    stats_data <- numeric_cols %>% 
+      mutate(Medians = apply(numeric_cols, 1, function(x) median(x, na.rm = TRUE)),
+             variances = apply(numeric_cols, 1, var, na.rm = TRUE),
+             num_zeros = apply(numeric_cols, 1, function(x) sum(x==0, na.rm = TRUE)))
+    
+    stats_data$Passes_Filter <- filtered_data$Passes_Filter
+    
+    
+    # median count vs variance
+    plotA <- ggplot(stats_data, aes(x = log(Medians),
+                                    y = log(variances),
+                                    color = Passes_Filter)) +
+      geom_point() +
+      labs(title = "Median Count vs Variance",
+           x = "Log(Median Count)",
+           y = "Log(Variance)") +
+      scale_color_manual(values = c("Yes" = "darkblue", "No" = "red"))
+    
+    # median count vs number of zeros
+    plotB <- ggplot(stats_data, aes(x = Medians, y= num_zeros, color = Passes_Filter)) +
+      geom_point() +
+      labs(title = "Median Count vs Number of Zeros",
+           x = "Median Count",
+           y = "Number of Zeros") +
+      scale_color_manual(values = c("Yes" = "darkblue", "No" = "red"))
+    
+    two_plots <- cowplot::plot_grid(plotA, plotB, ncol = 1, align = 'v')                
+    
+    return(two_plots)
+  })
+  
+  output$heatmap <- renderPlot({
+    filtered_data <- filteredData()
+    numeric_cols <- Filter(is.numeric, filtered_data)
+    
+    matrix <- as.matrix(numeric_cols)
+    color_palette <- colorRampPalette(c("yellow2", "goldenrod", "darkred"))(50)
+    
+    # normalizing rows
+    matrix <- scale(matrix, center = TRUE, scale = TRUE)
+    
+    map <- reactive({
+      heatmap.2(matrix, col = color_palette, dendrogram = 'none', trace = 'none', breaks = seq(-10, 10, length = 51))
+    })()
+    
+    return(map)
+  })
+  
+  output$pcaplot <- renderPlot({
+    pca <- pca_data(load_counts()) 
+    
+    x_pc <- input$x_axis 
+    y_pc <- input$y_axis 
+    pc_data <- as.data.frame(pca$x[, c(x_pc, y_pc)])  
+    
+    percent_variance <- (pca$sdev^2) / sum(pca$sdev^2) * 100  
+    percent_variance_x <- round(percent_variance[x_pc], 2)  
+    percent_variance_y <- round(percent_variance[y_pc], 2)  
+    
+    # Creating plot
+    ggplot(pc_data, aes(x = pc_data[, 1], y = pc_data[, 2])) +
+      geom_point() +
+      labs(x = paste0("PC", x_pc, " (", percent_variance_x , "%)"),
+           y = paste0("PC", y_pc, " (", percent_variance_y , "%)"),
+           title = "PCA Plot")
   })
   
   
@@ -266,7 +352,8 @@ server <- function(input, output) {
   output$deseq_plots <- renderPlot({ 
     deseq_plot_type <- input$deseq_plot_button
     deseq_tab_data <- load_deseq_data()
-    
+    #input$button
+    #isolate
     if (deseq_plot_type == 'Histogram of raw pvalues') { #a histogram of the raw p-values from the DESeq2 results
       his_plot1 <- ggplot(deseq_tab_data) +
         geom_histogram(mapping=aes(x=!!sym('pvalue')), bins = 50,  fill = 'lightblue', color = 'black') +
