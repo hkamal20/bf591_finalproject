@@ -17,6 +17,7 @@ library(dplyr)
 library(cowplot)
 library(RColorBrewer)
 library(gplots)
+library(ggbeeswarm)
 
 
 # Define UI for application that draws a histogram
@@ -70,13 +71,22 @@ ui <- fluidPage(
                 #Tab with content similar to that described in [Assignment 7]
           )
         ),
-        tabPanel("Gene Set Enrichment Analysis"),
+        tabPanel("Visualization of Individual Gene Expression",
+                 radioButtons('categorical', "See a categorical field in the sample information matrix file.",
+                              choices = c('Diagnosis (Huntingtons Disease or Neurologically Normal)')),
+                 textInput("gene_search", "Search for a Gene: (such as ENSG00000000003.10)"),
+                 textOutput("selected_gene_output"),
+                 tableOutput('test_table'),
+                 radioButtons('plot_options', 'Choose a type of plot that you would like to see.',
+                              choices = c('Bar Plot', 'Boxplot', 'Violin Plot', 'Beeswarm Plot')),
+                 actionButton("go", "Plot"),
+                 plotOutput("gene_expression_plots")
+                 
+        )
       )
     )
   )
 )
-
-#
 server <- function(input, output) {
   options(shiny.maxRequestSize = 30*1024^2) # so program can take a larger file size
   
@@ -208,6 +218,22 @@ server <- function(input, output) {
     deseq_df <- data
     return(deseq_df)
   }
+  
+  
+  
+  merge_data <- function(counts, metadata){
+    countsdf<- as.data.frame(counts)
+    counts_t <- t(countsdf)
+    meta <- as.data.frame(metadata)
+    
+    df1 <- cbind(RowID = rownames(counts_t), counts_t)
+    df2 <- cbind(RowID = rownames(meta), meta)
+    merged_df <- cbind(df1, df2[, -1])
+    merged_df <- subset(merged_df, select = -RowID)
+    
+    return(merged_df)
+  }
+  
   
   
   output$summary <- renderTable({ #pulling the summary table from the function, part of samples tabset
@@ -371,6 +397,68 @@ server <- function(input, output) {
       return(volc)
     }
     
+  })
+  
+  output$selected_gene_output <- renderText({
+    paste("Selected Gene: ", input$gene_search)
+  })
+  
+  selected_gene_data <- reactive({
+    gene <- input$gene_search
+    merged_data <- merge_data(load_counts(), load_data())
+    #print(merged_data)
+    selected_gene_and_diagnosis <- merged_data[, c(gene, 'Diagnosis')]
+    #print(selected_gene_and_diagnosis)
+    return(selected_gene_and_diagnosis)
+  })
+  
+  observeEvent(input$go, {
+    plot_type <- input$plot_options
+    gene_condition <- selected_gene_data() #df with the selected gene count
+    gene_condition_df <- as.data.frame(gene_condition)
+    colnames(gene_condition_df)[1] ="counts"
+    gene_condition_df$counts <- as.numeric(gene_condition_df$counts)
+    
+    #print(gene_condition_df)
+    req(gene_condition_df)
+    
+    if (plot_type == 'Bar Plot') {
+      output$gene_expression_plots <- renderPlot({
+        plot <- ggplot(gene_condition_df) +
+          geom_bar(aes(x=Diagnosis, y= counts), stat = 'identity', fill = 'magenta3') +
+          labs(title = paste("Bar Plot of Gene Expression for", input$gene_search),
+               x = "Diagnosis", y = "Gene Expression Counts") +
+          theme_minimal()
+        return(plot)
+      })
+    } else if (plot_type == 'Boxplot') {
+      output$gene_expression_plots <- renderPlot({
+        plot2 <- ggplot(gene_condition_df) +
+          geom_boxplot(aes(x=Diagnosis, y= counts)) +
+          labs(title = paste("Boxplot of Gene Expression for", input$gene_search),
+               x = "Diagnosis", y = "Gene Expression Counts") +
+          theme_minimal()
+        return(plot2)
+      })
+    } else if (plot_type == 'Violin Plot') {
+      output$gene_expression_plots <- renderPlot({
+        plot3 <- ggplot(gene_condition_df) +
+          geom_violin(aes(x=Diagnosis, y= counts, fill = Diagnosis)) +
+          labs(title = paste("Violin Plot of Gene Expression for", input$gene_search),
+               x = "Diagnosis", y = "Gene Expression Counts") +
+          theme_minimal()
+        return(plot3)
+      })
+    } else if (plot_type == 'Beeswarm Plot') {
+      output$gene_expression_plots <- renderPlot({
+        plot4 <- ggplot(gene_condition_df) +
+          geom_beeswarm(aes(x=Diagnosis, y= counts, fill = Diagnosis, color= Diagnosis), cex=2, size=2) +
+          labs(title = paste("Beeswarm Plot of Gene Expression for", input$gene_search),
+               x = "Diagnosis", y = "Gene Expression Counts") +
+          theme_minimal()
+        return(plot4)
+      })
+    }
   })
   
 }
